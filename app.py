@@ -61,7 +61,7 @@ def handle_callback():
         response.headers['Content-Type'] = 'application/json'
         return response
 
-    if 'code' in requests.args:
+    if 'code' in request.args:
         #return jsonify(code=request.args.get('code'))
         payload = {
             'client_id': client_id,
@@ -74,8 +74,8 @@ def handle_callback():
 
         if 'access_token' in resp:
             login_session['access_token'] = resp['access_token']
-            return jsonify(access_token=resp['access_token'])
-            #return redirect(url_for('index'))
+            # return jsonify(access_token=resp['access_token'])
+            return redirect(url_for('index'))
         else:
             return jsonify(error="Error retrieving access_token"), 404
     else:
@@ -88,8 +88,8 @@ def index():
     if 'access_token' not in login_session:
         return 'Never trust strangers', 404
     # Get user information from github api
-    access_token_url = 'https://api.github.com/user?access_token={}'
-    r = requests.get(access_token_url.format(login_session['access_token']))
+    access_token_url = 'https://api.github.com/user'
+    r = requests.get(access_token_url, headers={'Authorization': 'token '+login_session['access_token']})
     try:
         resp = r.json()
         gh_profile = resp['html_url'] 
@@ -125,8 +125,8 @@ def getRepos(username):
     url = request_url + '/users/{username}/repos?per_page=500'.format(username=username)
     headers = {'Accept': 'application/json'}
     try:
-        req = requests.get(url, headers=headers, timeout=4)
-    except (requests.exceptions.Timeout) as e:
+        req = request.get(url, headers=headers, timeout=4)
+    except (request.exceptions.Timeout) as e:
         return jsonify("connection timed out")
 
     if req.status_code == 200:
@@ -166,7 +166,7 @@ def getCommits(username, repo_name):
     url = request_url + '/repos/{username}/{repo_name}/commits'\
           .format(username=username, repo_name=repo_name)
     headers = {'Accept': 'application/json'}
-    res = requests.get(url, headers=headers)
+    res = request.get(url, headers=headers)
     commits = res.json()
     try:
         app.logger.info("Try to get commits information inside getCommits")
