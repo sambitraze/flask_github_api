@@ -97,13 +97,14 @@ def index():
         avatar_url = resp['avatar_url']
         bio = resp['bio']
         name = resp['name']
-        return jsonify(
-          gh_profile=gh_profile,
-          gh_username=username,
-          avatar_url=avatar_url,
-          gh_bio=bio,
-          name=name
-        )
+        # return jsonify(
+        #   gh_profile=gh_profile,
+        #   gh_username=username,
+        #   avatar_url=avatar_url,
+        #   gh_bio=bio,
+        #   name=name
+        # )
+        return redirect("/user/"+username)
     except AttributeError:
         app.logger.debug('error getting username from github, whoops')
         return "I don't know who you are; I should, but regretfully I don't", 500
@@ -125,8 +126,8 @@ def getRepos(username):
     url = request_url + '/users/{username}/repos?per_page=500'.format(username=username)
     headers = {'Accept': 'application/json'}
     try:
-        req = request.get(url, headers=headers, timeout=4)
-    except (request.exceptions.Timeout) as e:
+        req = requests.get(url, headers=headers, timeout=4)
+    except (requests.exceptions.Timeout) as e:
         return jsonify("connection timed out")
 
     if req.status_code == 200:
