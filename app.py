@@ -40,9 +40,9 @@ def index():
     return render_template_string(t)
 
 
-@github.access_token_getter
-def token_getter():
-    return g.user.github_access_token
+# @github.access_token_getter
+# def token_getter():
+#     return g.user.github_access_token
 
 
 @app.route('/github-callback')
