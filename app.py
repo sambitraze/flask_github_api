@@ -1,133 +1,187 @@
-from flask import Flask, request, g, session, redirect, url_for
-from flask import render_template_string, jsonify
-from flask_github import GitHub
-from sqlalchemy import create_engine, Column, Integer, String
-from sqlalchemy.orm import scoped_session, sessionmaker
-from sqlalchemy.ext.declarative import declarative_base
+from flask import Flask, json, jsonify, redirect, \
+                 render_template, url_for
+from flask import session as login_session
+from flask.helpers import make_response
+from flask import request
+from flask_cors import CORS, cross_origin # My front end is with React and works on a different server
 
-
-SECRET_KEY = 'development key'
-DEBUG = True
-
-GITHUB_CLIENT_ID = 'Iv1.387ade82abe70fd3'
-GITHUB_CLIENT_SECRET= '4311124136b8370cd6aee062a00580ac9a093300'
-
+import requests
+import random
+import string
+from credentials import client_id, client_secret # credentials.py has the client_id and client_secret
 
 app = Flask(__name__)
-app.config.from_object(__name__)
+CORS(app) #allows CORS on all routes
+app.secret_key = 'super secret key'
 
-# setup github-flask
-github = GitHub(app)
-app.config['DATABASE_URI'] = 'postgresql://pcfwznkjelhabd:f1f51771895775f2ed07bc5216a267ef3dcea2e3ff061a81d23bcd00d8750013@ec2-35-174-56-18.compute-1.amazonaws.com:5432/d6v3gl4ejfl059'
+authorization_base_url = 'https://github.com/login/oauth/authorize'
+token_url = 'https://github.com/login/oauth/access_token'
+request_url = 'https://api.github.com'
 
-
-# setup sqlalchemy
-engine = create_engine(app.config['DATABASE_URI'])
-db_session = scoped_session(sessionmaker(autocommit=False,
-                                         autoflush=False,
-                                         bind=engine))
-Base = declarative_base()
-Base.query = db_session.query_property()
-
-
-def init_db():
-    Base.metadata.create_all(bind=engine)
-
-
-class User(Base):
-    __tablename__ = 'users'
-
-    id = Column(Integer, primary_key=True)
-    github_access_token = Column(String(255))
-    github_id = Column(Integer)
-    github_login = Column(String(255))
-
-    def __init__(self, github_access_token):
-        self.github_access_token = github_access_token
-
-
-@app.before_request
-def before_request():
-    g.user = None
-    if 'user_id' in session:
-        g.user = User.query.get(session['user_id'])
-
-
-@app.after_request
-def after_request(response):
-    db_session.remove()
-    return response
-
-
+# 1. Shows login page with a random 'state' parameter to prevent CSRF
 @app.route('/')
+def showLogin():
+  '''
+    Shows login page. Sends a random 'state' parameter to the page
+    to prevent csrf. If you have your front-end running on a different
+    server you can choose to create the 'state' value their or send the
+    value from this endpoint.
+    The value of 'state' is also stored in session object for future use.
+    Returns a random string for 'state' and an optional template.
+  '''
+  state = ''.join(random.choice(string.ascii_uppercase + string.digits)
+                    for x in range(32))
+  login_session['state'] = state
+  # return jsonify(state=state) # to return state in a json response
+  return render_template('login.html', state=state)
+
+
+# 1. Send initial request to get permissions from the user
+@app.route('/handleLogin', methods=["GET"])
+def handleLogin():
+    state = ''.join(random.choice(string.ascii_uppercase + string.digits)
+                    for x in range(32))
+    login_session['state'] = state
+    if login_session['state'] == state:
+        fetch_url = authorization_base_url + \
+            '?client_id=' + client_id + \
+            '&state=' + login_session['state'] + \
+            '&scope=user%20repo%20public_repo' + \
+                '&allow_signup=true'
+        return redirect(fetch_url)
+    else:
+        return jsonify(invalid_state_token="invalid_state_token")
+
+
+#2. Using the /callback route to handle authentication.
+@app.route('/callback', methods=['GET', 'POST'])
+def handle_callback():
+    if request.args.get('state') != login_session['state']:
+        response = make_response(json.dumps('Invalid state parameter!'), 401)
+        response.headers['Content-Type'] = 'application/json'
+        return response
+
+    if 'code' in requests.args:
+        #return jsonify(code=request.args.get('code'))
+        payload = {
+            'client_id': client_id,
+            'client_secret': client_secret,
+            'code': request.args['code']
+        }
+        headers = {'Accept': 'application/json'}
+        req = requests.post(token_url, params=payload, headers=headers)
+        resp = req.json()
+
+        if 'access_token' in resp:
+            login_session['access_token'] = resp['access_token']
+            return jsonify(access_token=resp['access_token'])
+            #return redirect(url_for('index'))
+        else:
+            return jsonify(error="Error retrieving access_token"), 404
+    else:
+        return jsonify(error="404_no_code"), 404
+
+# 3. Get user information from Github 
+@app.route('/index')
 def index():
-    if g.user:
-        t = 'Hello! %s <a href="{{ url_for("user") }}">Get user</a> ' \
-            '<a href="{{ url_for("repo") }}">Get repo</a> ' \
-            '<a href="{{ url_for("logout") }}">Logout</a>'
-        t %= g.user.github_login
+    # Check for access_token in session
+    if 'access_token' not in login_session:
+        return 'Never trust strangers', 404
+    # Get user information from github api
+    access_token_url = 'https://api.github.com/user?access_token={}'
+    r = requests.get(access_token_url.format(login_session['access_token']))
+    try:
+        resp = r.json()
+        gh_profile = resp['html_url'] 
+        username = resp['login']
+        avatar_url = resp['avatar_url']
+        bio = resp['bio']
+        name = resp['name']
+        return jsonify(
+          gh_profile=gh_profile,
+          gh_username=username,
+          avatar_url=avatar_url,
+          gh_bio=bio,
+          name=name
+        )
+    except AttributeError:
+        app.logger.debug('error getting username from github, whoops')
+        return "I don't know who you are; I should, but regretfully I don't", 500
+      
+# This endpoint fetches list of repositories of a user
+@app.route('/user/<string:username>')
+def getRepos(username):
+    if not 'access_token' in login_session:
+        invalid_access_token="Access token has expired or not in session"
+        app.logger.error(invalid_access_token)
+        return jsonify(invalid_access_token=invalid_access_token)
+    if not username:
+        return jsonify(username_not_give="Github username needed to fetch \
+                                         repos")
+    # ?per_page=N : Have N>500. By default Github only returns first 30 objects
+    # returned by any query and then the rest are obtained in a different ways.
+    # Like using the 'since' parameter to mention the last ID you saw or using 
+    # the Link header. Read More about it at: https://developer.github.com/v3/#pagination
+    url = request_url + '/users/{username}/repos?per_page=500'.format(username=username)
+    headers = {'Accept': 'application/json'}
+    try:
+        req = requests.get(url, headers=headers, timeout=4)
+    except (requests.exceptions.Timeout) as e:
+        return jsonify("connection timed out")
+
+    if req.status_code == 200:
+        resp = req.json()
+        try:
+            app.logger.debug("Try to get repository names from response")
+            repo_info = []
+            for each_repo in resp:
+                repo_dict = {}
+                repo_dict['repo_name'] = each_repo['full_name']
+                repo_dict['repo_link'] = each_repo['html_url']
+                repo_dict['description'] = each_repo['description']
+                repo_dict['owner_fullname'] = each_repo['owner']['login']
+                repo_dict['html_url'] = each_repo['html_url']
+                repo_info.append(repo_dict)
+            app.logger.debug("Successfully fetched repository info from response")
+            return jsonify(  
+                repo_count=len(repo_info),
+                repo_info=repo_info
+            ), 200
+        except (TypeError, AttributeError, KeyError) as e:
+            app.logger.error(e)
+            return jsonify(no_user_found="no user found"), 404
     else:
-        t = 'Hello! <a href="{{ url_for("login") }}">Login</a>'
+        res = req.json()['message']
+        return jsonify(error=res)
 
-    return render_template_string(t)
-
-
-@github.access_token_getter
-def token_getter():
-    user = g.user
-    if user is not None:
-        return user.github_access_token
-
-
-@app.route('/github-callback')
-@github.authorized_handler
-def authorized(access_token):
-    next_url = request.args.get('next') or url_for('index')
-    if access_token is None:
-        return redirect(next_url)
-
-    user = User.query.filter_by(github_access_token=access_token).first()
-    if user is None:
-        user = User(access_token)
-        db_session.add(user)
-
-    user.github_access_token = access_token
-
-    # Not necessary to get these details here
-    # but it helps humans to identify users easily.
-    g.user = user
-    github_user = github.get('/user')
-    user.github_id = github_user['id']
-    user.github_login = github_user['login']
-
-    db_session.commit()
-
-    session['user_id'] = user.id
-    return redirect(next_url)
-
-
-@app.route('/login')
-def login():
-    if session.get('user_id', None) is None:
-        return github.authorize()
-    else:
-        return 'Already logged in'
-
-
-@app.route('/logout')
-def logout():
-    session.pop('user_id', None)
-    return redirect(url_for('index'))
-
-
-@app.route('/user')
-def user():
-    return jsonify(github.get('/user'))
-
-
-@app.route('/repo')
-def repo():
-    return jsonify(github.get('/repos/cenkalti/github-flask'))
-
+# Get commits on a repository by username
+@app.route('/user/<string:username>/<string:repo_name>/commits')
+def getCommits(username, repo_name):
+    if not 'access_token' in login_session:
+        invalid_access_token="Access token has expired or not in session"
+        app.logger.error(invalid_access_token)
+        return jsonify(invalid_access_token=invalid_access_token)
+    if not username and not repo_name:
+        return jsonify(username_not_give="Github username or repo_name missing")
+    url = request_url + '/repos/{username}/{repo_name}/commits'\
+          .format(username=username, repo_name=repo_name)
+    headers = {'Accept': 'application/json'}
+    res = requests.get(url, headers=headers)
+    commits = res.json()
+    try:
+        app.logger.info("Try to get commits information inside getCommits")
+        commit_info = []
+        for commit in commits:
+            commit_dict = {}
+            commit_dict['commit_author'] = commit['commit']['author']['name']
+            commit_dict['commit_date'] = commit['commit']['author']['date']
+            commit_dict['commit_msg'] = commit['commit']['message']
+            commit_info.append(commit_dict)
+        app.logger.info("Commit info retrieval successfull")
+        return jsonify(commits=commit_info)
+    except (TypeError, AttributeError, KeyError)as e:
+        app.logger.error(e)
+        return jsonify(error=e)
+    
 if __name__ == '__main__':
     app.run(debug=True, port=4000, host='0.0.0.0',)
