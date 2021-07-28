@@ -5,18 +5,21 @@ from sqlalchemy import create_engine, Column, Integer, String
 from sqlalchemy.orm import scoped_session, sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
 
-DATABASE_URI = 'sqlite:////tmp/github-flask.db'
+
 SECRET_KEY = 'development key'
 DEBUG = True
 
 GITHUB_CLIENT_ID = 'Iv1.387ade82abe70fd3'
 GITHUB_CLIENT_SECRET= '4311124136b8370cd6aee062a00580ac9a093300'
 
+
 app = Flask(__name__)
 app.config.from_object(__name__)
 
 # setup github-flask
 github = GitHub(app)
+app.config['DATABASE_URI'] = 'postgresql://pcfwznkjelhabd:f1f51771895775f2ed07bc5216a267ef3dcea2e3ff061a81d23bcd00d8750013@ec2-35-174-56-18.compute-1.amazonaws.com:5432/d6v3gl4ejfl059'
+
 
 # setup sqlalchemy
 engine = create_engine(app.config['DATABASE_URI'])
